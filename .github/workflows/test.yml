@@ -20,7 +20,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: shellcheck install.sh
-      - name: Patch template sanity
+      - name: Patch templates sanity
         run: |
-          grep -q '__MODULE_URL__' cordis.patch.yml
+          grep -q 'name: dsh-wsl-gpufix' cordis.patch.yml
           grep -q 'gpu-device-grant' cordis.patch.yml
+          grep -q '__MODULE_URL__' home/cordis.patch.yml
+          grep -q 'gpu-device-grant' home/cordis.patch.yml
