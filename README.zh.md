@@ -1,5 +1,8 @@
 # dsh-wsl-gpufix
 
+[![test](https://github.com/Jumqyc/dsh-wsl-gpufix/actions/workflows/test.yml/badge.svg)](https://github.com/Jumqyc/dsh-wsl-gpufix/actions/workflows/test.yml)
+
+**社区非官方插件，与 DeepSeek 官方无关，未获官方背书。**
 
 [English](README.md) | 简体中文
 

@@ -1,5 +1,9 @@
 # dsh-wsl-gpufix
 
+[![test](https://github.com/Jumqyc/dsh-wsl-gpufix/actions/workflows/test.yml/badge.svg)](https://github.com/Jumqyc/dsh-wsl-gpufix/actions/workflows/test.yml)
+
+**Unofficial community plugin — not affiliated with or endorsed by DeepSeek.**
+
 [English](README.md) | [简体中文](README.zh.md)
 
 A Cordis host-composition plugin for [DSH](https://github.com/deepseek-ai) that
