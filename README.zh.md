@@ -52,7 +52,7 @@ WSL2 上这会以两种方式挡住 GPU：
 
 ## 安装
 
-本插件是标准 DSH bundle 插件（`package.json` 里的 `dsh.bundle.patch`）。**四选一**。
+本插件是标准 DSH bundle 插件（`package.json` 里的 `dsh.bundle.patch`）。**三选一**。
 
 ### 方式 A：从 GitHub 安装（推荐，无需克隆）
 
@@ -73,26 +73,20 @@ dsh plugin --profile <profile> add link:/绝对路径/dsh-wsl-gpufix
 请用绝对路径（或在仓库目录内用 `link:.`）：相对路径会按你执行命令的目录解析，而不是
 profile 目录。
 
-### 方式 C：从 npm 安装（发布之后）
-
-```sh
-dsh plugin --profile <profile> add dsh-wsl-gpufix
-```
-
-### 方式 D：home patch 层（所有 profile 生效，不改任何 profile）
+### 方式 C：home patch 层（所有 profile 生效，不改任何 profile）
 
 ```sh
 bash install.sh
 ```
 
 会写入 `$DSH_HOME/cordis.patch.yml`，行里的 `name` 是本仓库 `gpu-device-grant.mjs` 的
-绝对 `file://` URL，因此对**每个** profile 生效。请与 A/B/C 二选一。
+绝对 `file://` URL，因此对**每个** profile 生效。请与 A/B 二选一。
 
 ### 卸载
 
 ```sh
-dsh plugin --profile <profile> remove dsh-wsl-gpufix   # 方式 A–C
-# 方式 D：删除 $DSH_HOME/cordis.patch.yml 里的 gpu-device-grant 条目
+dsh plugin --profile <profile> remove dsh-wsl-gpufix   # 方式 A–B
+# 方式 C：删除 $DSH_HOME/cordis.patch.yml 里的 gpu-device-grant 条目
 ```
 
 ### 让 AI 帮你装
@@ -154,7 +148,7 @@ config:
 
 | 现象 | 检查 |
 |---|---|
-| GPU 仍被挡 | 行是否已生效：`dsh --profile <profile> --dump-config \| grep gpu-device-grant`（方式 A–C）或 `$DSH_HOME/cordis.patch.yml`（方式 D） |
+| GPU 仍被挡 | 行是否已生效：`dsh --profile <profile> --dump-config \| grep gpu-device-grant`（方式 A–B）或 `$DSH_HOME/cordis.patch.yml`（方式 C） |
 | `cuInit` = 304 且 `nvidia-smi` 正常 | `/proc` 没授权（或不存在被跳过） |
 | 日志提示 "not the Landlock launcher" | 装了 bubblewrap 并抢到了 runner；bwrap 需要 `--dev-bind /dev/dxg /dev/dxg`，是另一种改法 |
 | `dmesg` 里 `dxgkio_query_adapter_info: Ioctl failed: -22` | WSL 既有噪声，未受限终端同样出现 |

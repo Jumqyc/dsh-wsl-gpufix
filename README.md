@@ -62,8 +62,8 @@ dsh-wsl-gpufix/
 ├── cordis.patch.yml        # bundle patch: inserts the gpu-device-grant row
 ├── gpu-device-grant.mjs    # the plugin (package entry point)
 ├── gpu-device-grant.test.mjs
-├── home/cordis.patch.yml   # template for the home-layer install (method D)
-├── install.sh              # method D installer
+├── home/cordis.patch.yml   # template for the home-layer install (method C)
+├── install.sh              # method C installer
 ├── docs/why.md             # root cause + the bisection that found it
 ├── SECURITY.md
 ├── README.md               # this file
@@ -95,13 +95,7 @@ dsh plugin --profile <profile> add link:/absolute/path/to/dsh-wsl-gpufix
 Use an absolute path, or `link:.` from inside the clone: relative specs are
 anchored to your invoking directory, not to the profile.
 
-### C. From npm (after `npm publish`)
-
-```sh
-dsh plugin --profile <profile> add dsh-wsl-gpufix
-```
-
-### D. Home patch layer — every profile, no profile changes
+### C. Home patch layer — every profile, no profile changes
 
 ```sh
 bash install.sh
@@ -109,13 +103,13 @@ bash install.sh
 
 Writes `$DSH_HOME/cordis.patch.yml` with a row whose `name` is this clone's
 absolute `file://` URL, so the grant applies to **every** profile without
-installing a package into any of them. Use this instead of A/B/C.
+installing a package into any of them. Use this instead of A/B.
 
 ### Uninstall
 
 ```sh
-dsh plugin --profile <profile> remove dsh-wsl-gpufix   # methods A–C
-# method D: delete the gpu-device-grant entry from $DSH_HOME/cordis.patch.yml
+dsh plugin --profile <profile> remove dsh-wsl-gpufix   # methods A–B
+# method C: delete the gpu-device-grant entry from $DSH_HOME/cordis.patch.yml
 ```
 
 ### Install with an AI assistant
@@ -182,7 +176,7 @@ This plugin deliberately **widens** the sandbox by the paths you configure. Read
 
 | Symptom | Check |
 |---|---|
-| GPU still blocked | Is the row composed? `dsh --profile <profile> --dump-config \| grep gpu-device-grant` (bundle methods A–C) or `$DSH_HOME/cordis.patch.yml` (method D) |
+| GPU still blocked | Is the row composed? `dsh --profile <profile> --dump-config \| grep gpu-device-grant` (bundle methods A–B) or `$DSH_HOME/cordis.patch.yml` (method C) |
 | `cuInit` = 304, `nvidia-smi` works | `/proc` is not granted (or was filtered out) |
 | Row logs "not the Landlock launcher" | bubblewrap is installed and won the runner chain; bwrap needs `--dev-bind /dev/dxg /dev/dxg`, a different profile change |
 | `dxgkio_query_adapter_info: Ioctl failed: -22` in `dmesg` | pre-existing WSL noise; also appears in a working unsandboxed terminal |
