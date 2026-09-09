@@ -1,0 +1,22 @@
+# ============================================================================
+# dsh-wsl-gpufix — home-layer patch template (the "all profiles" method)
+# ============================================================================
+# Installed by install.sh as $DSH_HOME/cordis.patch.yml, the home-level user
+# patch layer that is applied after every profile's own layer, so the grant
+# covers every profile without touching any of them.
+#
+# __MODULE_URL__ is substituted by install.sh with the absolute file:// URL of
+# gpu-device-grant.mjs in this clone, so the plugin is loaded in place.
+#
+# This is an alternative to the bundle method (`dsh plugin --profile <p> add
+# github:Jumqyc/dsh-wsl-gpufix`); use one, not both.
+#
+# Revert: delete this entry (or the whole file).
+# ============================================================================
+
+- insert:
+    - id: gpu-device-grant
+      name: __MODULE_URL__
+      config:
+        readWrite: ['/dev/dxg', '/proc']
+        modes: ['workspace-write']

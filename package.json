@@ -1,0 +1,52 @@
+{
+  "name": "dsh-wsl-gpufix",
+  "version": "1.0.0",
+  "description": "DSH/Cordis host plugin: grant /dev/dxg (+ /proc) to the Landlock sandbox so CUDA works in WSL2",
+  "type": "module",
+  "main": "gpu-device-grant.mjs",
+  "exports": "./gpu-device-grant.mjs",
+  "files": [
+    "gpu-device-grant.mjs",
+    "cordis.patch.yml",
+    "home",
+    "install.sh",
+    "docs",
+    "README.md",
+    "README.zh.md",
+    "SECURITY.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Jumqyc/dsh-wsl-gpufix.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Jumqyc/dsh-wsl-gpufix/issues"
+  },
+  "homepage": "https://github.com/Jumqyc/dsh-wsl-gpufix#readme",
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "dsh-plugins",
+    "deepseek-harness",
+    "cordis",
+    "wsl2",
+    "cuda",
+    "landlock",
+    "nvidia",
+    "sandbox",
+    "gpu"
+  ]
+}

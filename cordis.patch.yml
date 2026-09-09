@@ -1,0 +1,25 @@
+# ============================================================================
+# dsh-wsl-gpufix — DSH bundle patch (the plugin's mount declaration)
+# ============================================================================
+# DSH applies this file as a bundle layer once the package is installed in a
+# profile. `dsh plugin` reconciles dsh.profile.bundles from the installed
+# dependencies, so installing the package is all that is needed:
+#
+#   dsh plugin --profile <profile> add github:Jumqyc/dsh-wsl-gpufix
+#   # local clone:
+#   dsh plugin --profile <profile> add link:/absolute/path/to/dsh-wsl-gpufix
+#   # after npm publish:
+#   dsh plugin --profile <profile> add dsh-wsl-gpufix
+#
+# The row's `name` is the package name, resolved from the profile's
+# node_modules. Use this OR the home-layer method (`bash install.sh`, which
+# writes $DSH_HOME/cordis.patch.yml with a file:// URL and applies to every
+# profile) — not both.
+# ============================================================================
+
+- insert:
+    - id: gpu-device-grant
+      name: dsh-wsl-gpufix
+      config:
+        readWrite: ['/dev/dxg', '/proc']
+        modes: ['workspace-write']
