@@ -36,6 +36,13 @@
  * method is restored when the row unloads (`ctx.effect`), so the patch is
  * fully reversible.
  *
+ * `confine` is `async` since dsh 0.1.3 (`Promise<ConfinedArgv>`, plus a third
+ * `signal` argument) and synchronous before that, so the wrapper mirrors the
+ * shape it is handed: a thenable is awaited before the grants are injected, a
+ * plain object is patched in place. Assuming the synchronous shape is what
+ * broke every confined command on dsh 0.1.7-rc.1 with
+ * `TypeError: Cannot read properties of undefined (reading '0')`.
+ *
  * Missing paths are skipped at call time (the Landlock launcher fails closed
  * on an unopenable grant root, so granting a device that is not present would
  * break every sandboxed command). `/dev/dxg` appearing later is picked up on
@@ -115,8 +122,9 @@ const plugin = {
       return
     }
     let warnedForeignRunner = false
-    const patched = function confine(argv, policy) {
-      const confined = original.call(this, argv, policy)
+    // Grants are injected on the *resolved* ConfinedArgv, so one implementation
+    // serves both the synchronous and the async host.
+    const injectGrants = (confined, policy) => {
       if (policy === undefined || !activeModes.has(policy.mode)) return confined
       const program = confined.argv[0] ?? ''
       if (!program.endsWith(LANDLOCK_RUNNER_SUFFIX)) {
@@ -138,6 +146,16 @@ const plugin = {
           ...confined.argv.slice(separator),
         ],
       }
+    }
+    // `confine` is `async` since dsh 0.1.3 — `Promise<ConfinedArgv>` plus a third
+    // `signal` argument — and synchronous before that. Mirror whatever the host
+    // returns instead of assuming: taking `.argv` off the promise is exactly what
+    // broke every confined command on dsh 0.1.7-rc.1.
+    const patched = function confine(argv, policy, signal) {
+      const confined = original.call(this, argv, policy, signal)
+      return confined !== null && typeof confined?.then === 'function'
+        ? confined.then((resolved) => injectGrants(resolved, policy))
+        : injectGrants(confined, policy)
     }
     ctx.effect(() => {
       proto.confine = patched

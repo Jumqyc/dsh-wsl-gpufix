@@ -31,7 +31,9 @@ LEGACY="$DSH_HOME_DIR/plugins/gpu-device-grant.mjs"
 [[ -d "$DSH_HOME_DIR" ]] || { echo "install: $DSH_HOME_DIR does not exist (is DSH_HOME right?)" >&2; exit 1; }
 
 render_patch() {
-  sed "s|__MODULE_URL__|$MODULE_URL|g" "$TEMPLATE"
+  # Only the row's `name:` line carries the placeholder: an unanchored s/// also
+  # rewrote the template's prose, which mentions the same token.
+  sed "s|^\([[:space:]]*name:[[:space:]]*\)__MODULE_URL__[[:space:]]*$|\1$MODULE_URL|" "$TEMPLATE"
 }
 
 if [[ ! -e "$PATCH" ]]; then
@@ -43,12 +45,13 @@ elif grep -q "$ROW_MARKER" "$PATCH"; then
   else
     cp -f "$PATCH" "$PATCH.bak-gpu-device-grant"
     awk -v url="$MODULE_URL" '
+      /^[[:space:]]*id:.*gpu-device-grant[[:space:]]*$/ { print "      id: gpu-device-grant"; next }
       /^[[:space:]]*name:.*gpu-device-grant\.mjs[[:space:]]*$/ { print "      name: " url; next }
       { print }
     ' "$PATCH.bak-gpu-device-grant" > "$PATCH"
     echo "install: updated the row path in $PATCH (backup: $PATCH.bak-gpu-device-grant)"
   fi
-elif [[ "$(tr -d '[:space:]' < "$PATCH")" == "[]" ]]; then
+elif [[ "$(sed 's/#.*$//' "$PATCH" | tr -d '[:space:]')" == "[]" ]]; then
   render_patch > "$PATCH"
   echo "install: replaced the empty $PATCH with the $ROW_MARKER row"
 else

@@ -7,6 +7,9 @@
  * provider mirrors @deepseek-ai/dsh-sandbox-local's confine() shape (grant
  * flags, `--` separator, ConfinedArgv fields) closely enough to check where
  * the overlay inserts its grants and that it is fully reversible.
+ *
+ * Both host shapes are covered: synchronous confine (dsh < 0.1.3) and the
+ * async one (dsh >= 0.1.3, `Promise<ConfinedArgv>` plus a `signal` argument).
  */
 
 import assert from 'node:assert/strict'
@@ -17,19 +20,22 @@ import plugin, { DEFAULTS } from './gpu-device-grant.mjs'
 
 const LANDLOCK = '/opt/dsh/landlock-run'
 
-function makeSandbox({ program = LANDLOCK } = {}) {
+function makeSandbox({ program = LANDLOCK, isAsync = false, signals } = {}) {
   class FakeProvider {
-    confine(argv, policy) {
+    confine(argv, policy, signal) {
+      signals?.push(signal)
       const grants = ['--ro', '/', '--rw', '/dev/null']
       if (policy.mode === 'workspace-write') {
         grants.push('--rw', '/tmp', '--rw', policy.workspaceRoot)
       }
-      return {
+      const confined = {
         argv: [program, ...grants, '--', ...argv],
         enforcement: 'full',
         denialSignatures: ['permission denied'],
         runnerFailureRules: [],
       }
+      // dsh >= 0.1.3 declares confine async and resolves to the ConfinedArgv.
+      return isAsync ? Promise.resolve(confined) : confined
     }
   }
   return new FakeProvider()
@@ -159,4 +165,65 @@ test('invalid config fails loud instead of silently not granting', () => {
   const ctx = makeCtx(makeSandbox())
   assert.throws(() => plugin.apply(ctx, { readWrite: 'nope' }), /config\.readWrite/)
   assert.throws(() => plugin.apply(ctx, { modes: ['nonsense'] }), /unknown sandbox mode/)
+})
+
+test('sync host (dsh < 0.1.3): the wrapper stays synchronous', () => {
+  const sandbox = makeSandbox()
+  const ctx = makeCtx(sandbox)
+  plugin.apply(ctx, { readWrite: ['/dev/null'], modes: ['workspace-write'] })
+
+  const confined = sandbox.confine(['bash', '-c', 'true'], POLICY_WRITE)
+  assert.equal(typeof confined.then, 'undefined')
+  assert.equal(confined.argv[0], LANDLOCK)
+  assert.ok(confined.argv.includes('/dev/null'))
+})
+
+test('async host (dsh >= 0.1.3): grants land on the resolved ConfinedArgv, not on the promise', async () => {
+  const sandbox = makeSandbox({ isAsync: true })
+  const ctx = makeCtx(sandbox)
+  plugin.apply(ctx, { readWrite: ['/dev/null'], modes: ['workspace-write'] })
+
+  const pending = sandbox.confine(['bash', '-c', 'true'], POLICY_WRITE)
+  assert.equal(typeof pending.then, 'function')
+  const confined = await pending
+  const separator = confined.argv.indexOf('--')
+  assert.deepEqual(confined.argv.slice(separator - 2, separator), ['--rw', '/dev/null'])
+  assert.deepEqual(confined.argv.slice(separator + 1), ['bash', '-c', 'true'])
+  assert.equal(confined.argv[0], LANDLOCK)
+  assert.equal(confined.enforcement, 'full')
+})
+
+test('async host: read-only passes through unchanged', async () => {
+  const sandbox = makeSandbox({ isAsync: true })
+  const ctx = makeCtx(sandbox)
+  plugin.apply(ctx, { readWrite: ['/dev/null'], modes: ['workspace-write'] })
+
+  const confined = await sandbox.confine(['bash', '-c', 'true'], { mode: 'read-only', workspaceRoot: '/workspace' })
+  assert.equal(confined.argv.filter((arg) => arg === '/dev/null').length, 1)
+  assert.deepEqual(confined.argv.slice(confined.argv.indexOf('--') + 1), ['bash', '-c', 'true'])
+})
+
+test('async host: the signal argument is forwarded to the original confine', async () => {
+  const signals = []
+  const sandbox = makeSandbox({ isAsync: true, signals })
+  const ctx = makeCtx(sandbox)
+  plugin.apply(ctx, { readWrite: ['/dev/null'], modes: ['workspace-write'] })
+
+  const controller = new AbortController()
+  await sandbox.confine(['bash', '-c', 'true'], POLICY_WRITE, controller.signal)
+  assert.equal(signals.length, 1)
+  assert.equal(signals[0], controller.signal)
+})
+
+test('async host: foreign runner still warns once and adds nothing', async () => {
+  const sandbox = makeSandbox({ program: 'bwrap', isAsync: true })
+  const ctx = makeCtx(sandbox)
+  plugin.apply(ctx, { readWrite: ['/dev/null'], modes: ['workspace-write'] })
+
+  for (let i = 0; i < 3; i += 1) {
+    const confined = await sandbox.confine(['bash', '-c', 'true'], POLICY_WRITE)
+    assert.equal(confined.argv.filter((arg) => arg === '/dev/null').length, 1)
+  }
+  assert.equal(ctx.logs.warn.length, 1)
+  assert.match(ctx.logs.warn[0], /not the Landlock launcher/)
 })

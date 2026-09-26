@@ -51,7 +51,9 @@ approval policy, and it restores the original method when the row unloads.
 - WSL2 with working GPU passthrough — `nvidia-smi` must already work in a normal
   (unsandboxed) WSL terminal.
 - DSH with `dsh-sandbox-local` selecting its **Landlock** runner (bubblewrap is
-  not installed). Tested with `dsh 0.1.2-rc.1` on kernel 6.18 / WSL 2.7.13.
+  not installed). Tested with `dsh 0.1.2-rc.1` (synchronous `confine`) and
+  `dsh 0.1.7-rc.1` (`async confine`, `Promise<ConfinedArgv>`, third `signal`
+  argument) on kernel 6.18 / WSL 2.7.13.
 - A kernel with Landlock (`landlock-run --probe` prints `landlock: fully enforced`).
 
 ## Layout
@@ -179,6 +181,7 @@ This plugin deliberately **widens** the sandbox by the paths you configure. Read
 | GPU still blocked | Is the row composed? `dsh --profile <profile> --dump-config \| grep gpu-device-grant` (bundle methods A–B) or `$DSH_HOME/cordis.patch.yml` (method C) |
 | `cuInit` = 304, `nvidia-smi` works | `/proc` is not granted (or was filtered out) |
 | Row logs "not the Landlock launcher" | bubblewrap is installed and won the runner chain; bwrap needs `--dev-bind /dev/dxg /dev/dxg`, a different profile change |
+| Every confined command fails with `TypeError: Cannot read properties of undefined (reading '0')` | the wrapper read `.argv` off the promise: `confine` is `async` since dsh 0.1.3. Update the plugin — it now mirrors sync/async and forwards `signal` |
 | `dxgkio_query_adapter_info: Ioctl failed: -22` in `dmesg` | pre-existing WSL noise; also appears in a working unsandboxed terminal |
 | GPU blocked in `read-only` mode | add `read-only` to `modes` |
 
@@ -190,6 +193,13 @@ either, the row logs a warning and the sandbox keeps working without the GPU
 grant — it fails soft, never open. Re-run the verification command after
 upgrading DSH.
 
+`confine` is synchronous before dsh 0.1.3 and `async` from 0.1.3 on (returning
+`Promise<ConfinedArgv>`, with a third `signal` argument). The wrapper mirrors
+whichever shape the host hands it — a thenable is awaited before the grants are
+injected — so both hosts are supported. Do not read `confined.argv` directly:
+on an async host that is `undefined`, and `undefined[0]` throws inside every
+confined command.
+
 ## Tests
 
 ```sh
@@ -197,6 +207,16 @@ node --test
 ```
 
 Hermetic: no GPU, no `/dev/dxg`, no sandbox required.
+
+The wrapper is also checked against a *real* `dsh-sandbox-local` installation,
+whose `confine` is `async` since dsh 0.1.3 and takes a third `signal` argument.
+That check needs the host's dsh install, so it is a separate script rather than
+part of `node --test`:
+
+```sh
+node gpu-device-grant.integration.mjs
+DSH_SANDBOX_LOCAL=/path/to/dsh-sandbox-local/lib/index.js node gpu-device-grant.integration.mjs
+```
 
 ## License
 
