@@ -1,12 +1,16 @@
 /**
- * gpu-device-grant — host-plane Cordis plugin that widens the DSH local
- * sandbox's Landlock grant set by exactly the device paths it names.
+ * gpu-device-grant — host-plane Cordis plugin that makes the WSL2 GPU
+ * reachable inside the DSH local sandbox, on whichever runner that sandbox
+ * selects: the Landlock launcher or bubblewrap.
  *
  * Why this exists
  * ---------------
- * `@deepseek-ai/dsh-sandbox-local` builds the Landlock profile from a
- * hard-coded list: `/dev/null` always, plus `/tmp` and the workspace root
- * under `workspace-write`. Two extra grants are needed for the GPU:
+ * `@deepseek-ai/dsh-sandbox-local` hard-codes both runners' profiles and
+ * neither exposes `/dev/dxg` usefully.
+ *
+ * On the Landlock rung the profile is a grant list — `/dev/null` always, plus
+ * `/tmp` and the workspace root under `workspace-write` — so two extra grants
+ * are needed for the GPU:
  *
  * 1. `/dev/dxg` — the WSL GPU device. Without write access a confined process
  *    can open it read-only only, so CUDA/NVML report "no device" (`cuInit`
@@ -23,18 +27,40 @@
  *    root-owned sysctls, exactly as for an unconfined process.)
  *
  * The launcher already supports file-level grants (`--rw /dev/null` works the
- * same way), so the fix is to add these grants to the profile. This plugin
- * does that from the outside, on the public `ctx.sandbox.confine()` seam, so
- * no vendor file is edited and the change survives harness upgrades.
+ * same way), so on that rung the fix is to add these grants to the profile.
+ *
+ * On the bwrap rung a grant is meaningless, because the profile mounts
+ * `--dev /dev` — a fresh minimal devtmpfs in which `/dev/dxg` does not exist
+ * at all. The device has to be mounted in with `--dev-bind /dev/dxg /dev/dxg`,
+ * and that bind must land AFTER `--dev <dest>` in the argv: `--dev` mounts the
+ * fresh devtmpfs over `/dev`, so a bind placed before it is covered by that
+ * mount and `/dev/dxg` disappears again — silently, with no bwrap error and no
+ * nonzero exit. `/proc` needs nothing on this rung: the profile's own
+ * `--proc /proc` mounts a fresh procfs in which the confined process can
+ * already write its own task `comm`.
+ *
+ * This plugin makes both profile changes from the outside, on the public
+ * `ctx.sandbox.confine()` seam, so no vendor file is edited and the change
+ * survives harness upgrades.
  *
  * What it does
  * ------------
  * Wraps `LocalSandboxProvider.prototype.confine` while the row is mounted:
- * calls the original, then — only for the configured sandbox modes and only
- * when the selected runner is the Landlock launcher — inserts extra
- * `--rw <path>` grants just before the `--` argv separator. The original
- * method is restored when the row unloads (`ctx.effect`), so the patch is
- * fully reversible.
+ * calls the original, then inspects the runner the host actually selected and,
+ * only for the configured sandbox modes, edits that runner's own dialect:
+ *
+ *   Landlock launcher -> insert `--rw <path>` grants for `readWrite`
+ *   bwrap             -> insert `--dev-bind <path> <path>` for `deviceBinds`,
+ *                        anchored immediately after `--dev <dest>`
+ *
+ * A runner that is neither is left untouched and warned about once. The
+ * original method is restored when the row unloads (`ctx.effect`), so the
+ * patch is fully reversible.
+ *
+ * The runner is read off the RESOLVED `ConfinedArgv.argv[0]`, never off the
+ * argv the caller passed: `confine(argv, policy)` receives the caller's own
+ * command (`['bash', '-c', …]`) and picks the runner internally, so the
+ * caller's argv never names it.
  *
  * `confine` is `async` since dsh 0.1.3 (`Promise<ConfinedArgv>`, plus a third
  * `signal` argument) and synchronous before that, so the wrapper mirrors the
@@ -44,9 +70,10 @@
  * `TypeError: Cannot read properties of undefined (reading '0')`.
  *
  * Missing paths are skipped at call time (the Landlock launcher fails closed
- * on an unopenable grant root, so granting a device that is not present would
- * break every sandboxed command). `/dev/dxg` appearing later is picked up on
- * the next call with no restart.
+ * on an unopenable grant root, and bwrap fails the whole command on an
+ * unbindable source, so naming a device that is not present would break every
+ * sandboxed command). `/dev/dxg` appearing later is picked up on the next call
+ * with no restart.
  *
  * Mounting it (host composition)
  * ------------------------------
@@ -57,21 +84,26 @@
  *         name: ./plugins/gpu-device-grant.mjs
  *         config:
  *           readWrite: ['/dev/dxg', '/proc']
+ *           deviceBinds: ['/dev/dxg']
  *           modes: ['workspace-write']
  *
  * Config (all optional)
  * ---------------------
- *   readWrite  string[]  absolute paths granted read+write
- *                        (default ['/dev/dxg', '/proc'])
- *   modes      string[]  sandbox modes the grant applies to
- *                        (default ['workspace-write']; add 'read-only' to
- *                        allow GPU use in read-only sessions too)
+ *   readWrite    string[]  absolute paths granted read+write — Landlock rung
+ *                          only (default ['/dev/dxg', '/proc'])
+ *   deviceBinds  string[]  absolute device nodes mounted in with --dev-bind —
+ *                          bwrap rung only (default ['/dev/dxg'])
+ *   modes        string[]  sandbox modes the grant applies to
+ *                          (default ['workspace-write']; add 'read-only' to
+ *                          allow GPU use in read-only sessions too)
+ *
+ * The two path lists are not interchangeable and are deliberately separate:
+ * bwrap cannot express Landlock's `--rw /proc` (binding the host procfs would
+ * defeat the profile's own `--proc /proc`), and Landlock cannot express a
+ * device-node mount. Each rung reads only the list it can honour.
  *
  * Caveats
  * -------
- * - Landlock-only: if bubblewrap becomes the selected runner, the grant is not
- *   applied (bwrap's `--dev /dev` mounts a fresh /dev without /dev/dxg anyway)
- *   and a warning is logged once.
  * - `danger-full-access` never reaches `confine()`, so it needs nothing.
  * - Editing this file needs a DSH restart: the loader caches the imported
  *   module, and a patch-file reload reuses the cached callback.
@@ -81,11 +113,14 @@ import { existsSync } from 'node:fs'
 
 const DEFAULTS = {
   readWrite: ['/dev/dxg', '/proc'],
+  deviceBinds: ['/dev/dxg'],
   modes: ['workspace-write'],
 }
 
 const KNOWN_MODES = ['read-only', 'workspace-write', 'danger-full-access']
 const LANDLOCK_RUNNER_SUFFIX = 'landlock-run'
+const BWRAP_RUNNER = 'bwrap'
+const BWRAP_DEV_FLAG = '--dev'
 
 /** Read one optional string-array config field, or its default. */
 function readStringArray(config, key, fallback) {
@@ -98,11 +133,17 @@ function readStringArray(config, key, fallback) {
   return [...value]
 }
 
+/** Last path segment of a runner program, so `bwrap` and `/usr/bin/bwrap` both match. */
+function runnerName(program) {
+  return program.slice(program.lastIndexOf('/') + 1)
+}
+
 const plugin = {
   name: 'gpu-device-grant',
   inject: ['sandbox'],
   apply(ctx, config = {}) {
     const readWrite = readStringArray(config, 'readWrite', DEFAULTS.readWrite)
+    const deviceBinds = readStringArray(config, 'deviceBinds', DEFAULTS.deviceBinds)
     const modes = readStringArray(config, 'modes', DEFAULTS.modes)
     for (const mode of modes) {
       if (!KNOWN_MODES.includes(mode)) {
@@ -110,7 +151,7 @@ const plugin = {
       }
     }
     const activeModes = new Set(modes)
-    const missingAtMount = readWrite.filter((path) => !existsSync(path))
+    const missingAtMount = [...new Set([...readWrite, ...deviceBinds])].filter((path) => !existsSync(path))
     if (missingAtMount.length > 0) {
       ctx.logger.warn(`gpu-device-grant: ${missingAtMount.join(', ')} not present at mount; it will be granted as soon as it exists`)
     }
@@ -121,29 +162,56 @@ const plugin = {
       ctx.logger.warn('gpu-device-grant: ctx.sandbox.confine is not a function; no grant installed')
       return
     }
-    let warnedForeignRunner = false
-    // Grants are injected on the *resolved* ConfinedArgv, so one implementation
-    // serves both the synchronous and the async host.
+    const warned = new Set()
+    const warnOnce = (key, message) => {
+      if (warned.has(key)) return
+      warned.add(key)
+      ctx.logger.warn(message)
+    }
+    // Edits are applied to the *resolved* ConfinedArgv, so one implementation
+    // serves both the synchronous and the async host. The runner is read off
+    // that result, never off the caller's argv: confine() receives the caller's
+    // own command and picks the runner internally.
     const injectGrants = (confined, policy) => {
       if (policy === undefined || !activeModes.has(policy.mode)) return confined
-      const program = confined.argv[0] ?? ''
-      if (!program.endsWith(LANDLOCK_RUNNER_SUFFIX)) {
-        if (!warnedForeignRunner) {
-          warnedForeignRunner = true
-          ctx.logger.warn(`gpu-device-grant: sandbox runner ${JSON.stringify(program)} is not the Landlock launcher; the ${readWrite.join(', ')} grant is not applied`)
+      const argv = confined.argv
+      const program = argv[0] ?? ''
+      const separator = argv.indexOf('--')
+      if (separator < 0) return confined
+
+      if (runnerName(program) === BWRAP_RUNNER) {
+        const binds = deviceBinds.filter((path) => existsSync(path)).flatMap((path) => ['--dev-bind', path, path])
+        if (binds.length === 0) return confined
+        // `--dev <dest>` mounts a fresh minimal devtmpfs over /dev, so the bind
+        // has to land after it. Anywhere earlier it is covered by that mount and
+        // the device silently disappears again — no bwrap error, no nonzero exit.
+        const dev = argv.indexOf(BWRAP_DEV_FLAG)
+        if (dev < 0 || dev + 1 >= separator) {
+          warnOnce('bwrap-profile', `gpu-device-grant: bwrap profile has no ${BWRAP_DEV_FLAG} <dest> before the separator; leaving ${deviceBinds.join(', ')} alone rather than placing them where that devtmpfs would hide them`)
+          return confined
         }
+        return {
+          ...confined,
+          argv: [
+            ...argv.slice(0, dev + 2),
+            ...binds,
+            ...argv.slice(dev + 2),
+          ],
+        }
+      }
+
+      if (!program.endsWith(LANDLOCK_RUNNER_SUFFIX)) {
+        warnOnce('runner', `gpu-device-grant: sandbox runner ${JSON.stringify(program)} is neither the Landlock launcher nor bwrap; the ${readWrite.join(', ')} grant is not applied`)
         return confined
       }
       const grants = readWrite.filter((path) => existsSync(path)).flatMap((path) => ['--rw', path])
       if (grants.length === 0) return confined
-      const separator = confined.argv.indexOf('--')
-      if (separator < 0) return confined
       return {
         ...confined,
         argv: [
-          ...confined.argv.slice(0, separator),
+          ...argv.slice(0, separator),
           ...grants,
-          ...confined.argv.slice(separator),
+          ...argv.slice(separator),
         ],
       }
     }
@@ -159,7 +227,7 @@ const plugin = {
     }
     ctx.effect(() => {
       proto.confine = patched
-      ctx.logger.info(`gpu-device-grant: granting rw on ${readWrite.join(', ')} to sandbox mode(s) ${modes.join(', ')}`)
+      ctx.logger.info(`gpu-device-grant: granting rw on ${readWrite.join(', ')} (Landlock) and --dev-bind on ${deviceBinds.join(', ')} (bwrap) to sandbox mode(s) ${modes.join(', ')}`)
       return () => {
         if (proto.confine === patched) proto.confine = original
       }

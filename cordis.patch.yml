@@ -22,4 +22,5 @@
       name: dsh-wsl-gpufix
       config:
         readWrite: ['/dev/dxg', '/proc']
+        deviceBinds: ['/dev/dxg']
         modes: ['workspace-write']

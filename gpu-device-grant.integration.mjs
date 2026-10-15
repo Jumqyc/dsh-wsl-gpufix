@@ -52,10 +52,11 @@ function check(label, ok, detail = '') {
   if (!ok) failures += 1
 }
 
-/** A real provider: the constructor needs a live cordis context, so build off the real prototype. */
-function makeProvider() {
+/** A real provider: the constructor needs a live cordis context, so build off the real prototype.
+ * The chain is pinned so the provider resolves its own runner and profile without probing. */
+function makeProvider(chain = ['landlock']) {
   const sandbox = Object.create(Provider.prototype)
-  sandbox.internals = { chain: ['landlock'] }  // sole candidate: no probe, the package resolves its own launcher
+  sandbox.internals = { chain }
   sandbox.runnerCommand = undefined
   sandbox.configuredRunnerFailureSignatures = []
   sandbox.probeTimeoutMs = 5000
@@ -111,6 +112,38 @@ function mount(sandbox, config = {}) {
   check('read-only gains no grant', !confined.argv.includes('/dev/dxg'))
   unload()
   check('unload restores the original confine', sandbox.confine === original)
+}
+
+// 4. the bwrap rung: the real bwrap profile, patched right after `--dev /dev`.
+// Pinned to /dev/null so this check runs on a host with no GPU; the real
+// /dev/dxg case is covered by step 5 when the device is actually present.
+{
+  const sandbox = makeProvider(['bwrap'])
+  const { logs } = mount(sandbox, { deviceBinds: ['/dev/null'] })
+  check('mount logs the bwrap bind', logs.some((line) => line.includes('--dev-bind')), logs.join(' | '))
+  const confined = await sandbox.confine(ARGV, POLICY)
+  check('bwrap is the selected runner', confined.argv[0] === 'bwrap', String(confined.argv[0]))
+  const dev = confined.argv.indexOf('--dev')
+  const before = JSON.stringify(confined.argv.slice(dev, dev + 5))
+  check('the bind sits immediately after --dev /dev',
+    before === JSON.stringify(['--dev', '/dev', '--dev-bind', '/dev/null', '/dev/null']), before)
+  check('no --rw leaks into a bwrap profile', !confined.argv.includes('--rw'))
+  check('the command after the separator is untouched',
+    JSON.stringify(confined.argv.slice(confined.argv.indexOf('--') + 1)) === JSON.stringify(ARGV))
+  check('enforcement survives the bwrap patch', confined.enforcement === 'full', String(confined.enforcement))
+}
+
+// 5. the default device, on a host that actually has it.
+if (existsSync('/dev/dxg')) {
+  const sandbox = makeProvider(['bwrap'])
+  mount(sandbox)
+  const confined = await sandbox.confine(ARGV, POLICY)
+  const dev = confined.argv.indexOf('--dev')
+  const before = JSON.stringify(confined.argv.slice(dev, dev + 5))
+  check('the default config binds /dev/dxg on bwrap',
+    before === JSON.stringify(['--dev', '/dev', '--dev-bind', '/dev/dxg', '/dev/dxg']), before)
+} else {
+  console.log('skip: /dev/dxg absent; the default bwrap device bind is not checked')
 }
 
 console.log(failures === 0 ? 'RESULT: PASS' : `RESULT: FAIL (${failures})`)
