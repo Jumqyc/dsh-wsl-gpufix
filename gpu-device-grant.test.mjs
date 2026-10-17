@@ -162,7 +162,9 @@ test('missing path: skipped so the launcher never fails closed on it', () => {
 test('unsupported runner: no grant, warning logged once', () => {
   const sandbox = makeSandbox({ runner: OTHER_RUNNER })
   const ctx = makeCtx(sandbox)
-  plugin.apply(ctx, { readWrite: ['/dev/null'], modes: ['workspace-write'] })
+  // Both lists pinned to /dev/null, which exists everywhere: a host without
+  // /dev/dxg must not add a mount-time warning on top of the runner one.
+  plugin.apply(ctx, { readWrite: ['/dev/null'], deviceBinds: ['/dev/null'], modes: ['workspace-write'] })
 
   for (let i = 0; i < 3; i += 1) {
     const confined = sandbox.confine(['bash', '-c', 'true'], POLICY_WRITE)
@@ -242,7 +244,8 @@ test('async host: the signal argument is forwarded to the original confine', asy
 test('async host: unsupported runner still warns once and adds nothing', async () => {
   const sandbox = makeSandbox({ runner: OTHER_RUNNER, isAsync: true })
   const ctx = makeCtx(sandbox)
-  plugin.apply(ctx, { readWrite: ['/dev/null'], modes: ['workspace-write'] })
+  // Same pinning as the synchronous case: only the runner warning may fire.
+  plugin.apply(ctx, { readWrite: ['/dev/null'], deviceBinds: ['/dev/null'], modes: ['workspace-write'] })
 
   for (let i = 0; i < 3; i += 1) {
     const confined = await sandbox.confine(['bash', '-c', 'true'], POLICY_WRITE)
