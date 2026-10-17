@@ -20,4 +20,5 @@
       name: __MODULE_URL__
       config:
         readWrite: ['/dev/dxg', '/proc']
+        deviceBinds: ['/dev/dxg']
         modes: ['workspace-write']

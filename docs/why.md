@@ -1,8 +1,9 @@
-# Why two grants are needed
+# Why the sandbox blocks the GPU
 
-This is the background behind `gpu-device-grant`: how the two missing Landlock
-grants were identified, and why the fix is a plugin rather than a one-line patch
-of the DSH sandbox package.
+This is the background behind `gpu-device-grant`: how the missing access to the
+GPU was identified on each of the two runners `dsh-sandbox-local` can select —
+the Landlock launcher's two grants, and bwrap's device bind — and why the fix is
+a plugin rather than a one-line patch of the DSH sandbox package.
 
 ## Symptom
 
@@ -24,8 +25,11 @@ Ioctl failed: -22` lines that also appear in a working terminal.
 
 ## Why the sandbox blocks it
 
-`@deepseek-ai/dsh-sandbox-local` builds the Landlock profile from a hard-coded
-list:
+`@deepseek-ai/dsh-sandbox-local` hard-codes a profile per runner and exposes no
+config field for extra device access — `dsh-sandbox-local`, `dsh-sandbox-policy`
+and `dsh-permission-presets` were all checked.
+
+**Landlock rung** — the profile is a grant list:
 
 ```js
 const readWrite = ["/dev/null"];
@@ -33,16 +37,62 @@ if (policy.mode === "workspace-write") readWrite.push("/tmp", policy.workspaceRo
 return grantArgs({ readOnly: ["/"], readWrite });
 ```
 
-Everything else is read-only. There is no supported config field for extra
-writable paths in `dsh-sandbox-local`, `dsh-sandbox-policy`, or
-`dsh-permission-presets`, so a confined process can open `/dev/dxg` read-only
-but not `O_RDWR`.
+Everything else is read-only, so a confined process can open `/dev/dxg`
+read-only but not `O_RDWR`. The launcher already supports file-level grants —
+`/dev/null` is granted the same way — including `LANDLOCK_ACCESS_FS_IOCTL_DEV`
+on ABI ≥ 5, which GPU ioctls need. This is the rung on the host where the GPU
+symptom was first bisected: bubblewrap was not installed, and the platform chain
+`["bwrap", "landlock"]` is probed in order, so Landlock was selected.
 
-The runner on this host is the Landlock launcher (bubblewrap is not installed,
-and the platform chain `["bwrap", "landlock"]` probes and selects Landlock). The
-launcher already supports file-level grants — `/dev/null` is granted the same
-way — including `LANDLOCK_ACCESS_FS_IOCTL_DEV` on ABI ≥ 5, which GPU ioctls
-need.
+**bwrap rung** — the profile is a mount list, and it mounts a new devtmpfs:
+
+```js
+function bwrapProfileArgs(policy) {
+  const args = ["--ro-bind", "/", "/", "--dev", "/dev", "--unshare-pid",
+                "--proc", "/proc", "--die-with-parent"];
+  if (policy.mode === "workspace-write") {
+    args.push("--tmpfs", "/tmp", "--bind", policy.workspaceRoot, policy.workspaceRoot);
+  }
+  return args;
+}
+```
+
+`--dev /dev` replaces `/dev` with a minimal devtmpfs holding only `null`, `zero`,
+`full`, `random`, `urandom`, `tty` and the pty plumbing, so `/dev/dxg` is not
+merely denied — it does not exist:
+
+```console
+$ ls /dev/
+core  fd  full  null  ptmx  pts  random  shm  stderr  stdin  stdout  tty  urandom  zero
+```
+
+A writable-path grant is the wrong tool on this rung; the node has to be mounted
+in with `--dev-bind`. `/proc` needs no grant either, because the profile's own
+`--proc /proc` already gives the confined process a writable task `comm`.
+
+Because the chain is probed in preference order, **installing bubblewrap silently
+moves a host from the first rung to the second**, and the entire grant/ABI/`/proc`
+analysis above stops applying at once. That trap is what the bwrap branch of this
+plugin closes.
+
+### Why the bind must follow `--dev`
+
+`--dev <dest>` mounts the fresh devtmpfs *over* `/dev`, so anything already bound
+at a path under `/dev` is covered by that mount. A bind placed earlier is
+therefore not an error — it is silently gone, which is the original symptom
+restored:
+
+```console
+$ bwrap --ro-bind / / --dev-bind /dev/dxg /dev/dxg --dev /dev --unshare-pid --proc /proc --die-with-parent -- ls /dev/dxg
+ls: cannot access '/dev/dxg': No such file or directory      # exit 2
+
+$ bwrap --ro-bind / / --dev /dev --dev-bind /dev/dxg /dev/dxg --unshare-pid --proc /proc --die-with-parent -- ls /dev/dxg
+crw-rw-rw- 1 nobody nobody 10, 258 /dev/dxg                  # exit 0
+```
+
+The plugin anchors its insertion to the `--dev <dest>` pair for exactly this
+reason, rather than appending before the `--` separator and trusting bwrap's
+current flag order to keep working.
 
 ## Finding the first grant: `/dev/dxg`
 
@@ -93,9 +143,10 @@ reliable grant.
 ## Why a plugin instead of patching the vendor file
 
 Pushing `"/dev/dxg"` and `"/proc"` into the `readWrite` list inside
-`dsh-sandbox-local/lib/index.js` also works, but it edits the deployment
-installation, is overwritten by DSH/profile updates, and needs a process restart
-to take effect (the module is already loaded).
+`dsh-sandbox-local/lib/index.js` also works — as does adding
+`"--dev-bind", "/dev/dxg", "/dev/dxg"` to `bwrapProfileArgs` — but it edits the
+deployment installation, is overwritten by DSH/profile updates, and needs a
+process restart to take effect (the module is already loaded).
 
 The home patch layer `$DSH_HOME/cordis.patch.yml` is the harness's own extension
 mechanism: user config, hot-reloaded with `patchReload: live`, no vendor file
@@ -105,6 +156,8 @@ confinement.
 
 ## Reproducing the diagnosis
 
+**On the Landlock rung:**
+
 1. Mount a temporary host plugin that wraps `ctx.sandbox.confine()` and appends
    `--rw <candidate>` before the `--` separator (see the plugin source for the
    exact shape).
@@ -113,6 +166,26 @@ confinement.
    a tiny `LD_PRELOAD` shim that logs failing `fopen`/`open`/`openat`/`ioctl`
    calls. `fopen` matters: glibc's `fopen` uses a hidden internal `open`, so a
    shim that only interposes `open` misses it.
+
+**On the bwrap rung**, no plugin is needed to see the problem, because the whole
+failure is a missing node rather than a permission:
+
+```sh
+# The vendor's own workspace-write profile, verbatim: /dev/dxg is simply absent.
+bwrap --ro-bind / / --dev /dev --unshare-pid --proc /proc --die-with-parent \
+      --tmpfs /tmp --bind "$PWD" "$PWD" -- ls -la /dev/dxg
+
+# Add the bind — and note that it has to follow --dev /dev to survive.
+bwrap --ro-bind / / --dev /dev --unshare-pid --proc /proc --die-with-parent \
+      --dev-bind /dev/dxg /dev/dxg -- ls -la /dev/dxg
+```
+
+Then confirm the GPU end to end from inside the corrected argv:
+
+```sh
+bwrap --ro-bind / / --dev /dev --dev-bind /dev/dxg /dev/dxg --unshare-pid \
+      --proc /proc --die-with-parent -- nvidia-smi --query-gpu=name --format=csv,noheader
+```
 
 ## A probe that lies
 

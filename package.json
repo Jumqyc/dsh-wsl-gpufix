@@ -1,7 +1,7 @@
 {
   "name": "dsh-wsl-gpufix",
   "version": "1.0.0",
-  "description": "DSH/Cordis host plugin: grant /dev/dxg (+ /proc) to the Landlock sandbox so CUDA works in WSL2",
+  "description": "DSH/Cordis host plugin: grant /dev/dxg (+ /proc) to the local sandbox — Landlock --rw grants and bwrap --dev-bind — so CUDA works in WSL2",
   "type": "module",
   "main": "gpu-device-grant.mjs",
   "exports": "./gpu-device-grant.mjs",
@@ -45,6 +45,8 @@
     "wsl2",
     "cuda",
     "landlock",
+    "bubblewrap",
+    "bwrap",
     "nvidia",
     "sandbox",
     "gpu"
